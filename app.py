@@ -1,6 +1,10 @@
 from fastapi import FastAPI
+import pickle
+import numpy as np
 
 app = FastAPI()
+
+model = pickle.load(open("model.pkl", "rb"))
 
 @app.get("/")
 def home():
@@ -11,11 +15,8 @@ def predict(data: dict):
     wl = data["water_level"]
     rain = data["rain_intensity"]
 
-    if wl > 30:
-        state = 2
-    elif wl > 20:
-        state = 1
-    else:
-        state = 0
+    input_data = np.array([[wl, rain]])
 
-    return {"state": state}
+    prediction = model.predict(input_data)[0]
+
+    return {"state": int(prediction)}
