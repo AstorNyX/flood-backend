@@ -8,8 +8,8 @@ app = FastAPI()
 # ===== LOAD MODEL =====
 model = pickle.load(open("model.pkl", "rb"))
 
-# ===== TELEGRAM CONFIG (HARDCODED FOR NOW) =====
-TOKEN = "8573374564:AAFmOnDbMd1r2DVJbKtIs03gnj-b6yY6D98"
+# ===== TELEGRAM CONFIG =====
+TOKEN = "YOUR_BOT_TOKEN"
 CHAT_ID = "-1003989233809"
 
 # ===== STORE LAST DATA =====
@@ -18,6 +18,14 @@ last_data = {
     "rain": 0,
     "state": 0
 }
+
+# ===== CONTROL VARIABLES =====
+last_alert_state = -1
+
+# ===== LABEL FUNCTION =====
+def get_label(state):
+    labels = ["SAFE", "LOW", "MODERATE", "HIGH", "CRITICAL"]
+    return labels[state] if state < len(labels) else "UNKNOWN"
 
 # ===== TELEGRAM FUNCTION =====
 def send_telegram(msg):
@@ -29,7 +37,6 @@ def send_telegram(msg):
     try:
         res = requests.post(url, data=data, timeout=5)
         print("Telegram status:", res.status_code)
-        print("Telegram response:", res.text)
     except Exception as e:
         print("Telegram error:", e)
 
@@ -48,6 +55,8 @@ def status():
 
 @app.post("/predict")
 def predict(data: dict):
+    global last_alert_state
+
     water = data["water_level"]
     rain = data["rain_intensity"]
 
@@ -60,17 +69,22 @@ def predict(data: dict):
     last_data["rain"] = rain
     last_data["state"] = state
 
-    print("STATE:", state)
+    print(f"STATE: {state}")
 
-    # ===== TELEGRAM TRIGGER =====
-    if state >= 2:
-        print("Sending Telegram message...")
+    # ===== TELEGRAM ALERT (NO SPAM) =====
+    if state >= 2 and state != last_alert_state:
+        print("Sending Telegram alert...")
+
         msg = f"""⚠ FLOOD ALERT
 
+Level: {get_label(state)}
 State: {state}
+
 Water Level: {water}
 Rain Intensity: {rain}
 """
         send_telegram(msg)
+
+    last_alert_state = state
 
     return {"state": state}
