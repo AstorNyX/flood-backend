@@ -73,7 +73,7 @@ def run_prediction(water, rain, source="HTTP"):
     now      = time.time()
     can_send = (now - last_sent_time) > COOLDOWN_SEC
 
-    if state >= 2 and can_send and (state_changed or water_changed or rain_changed):
+    if state >= 2 and can_send:
         print(f"[Telegram] Sending ALERT via {source}...")
         msg = (
             f"{get_emoji(state)} <b>FLOOD ALERT — {get_label(state)}</b>\n\n"
