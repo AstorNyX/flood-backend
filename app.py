@@ -2,58 +2,51 @@ from fastapi import FastAPI
 import pickle
 import numpy as np
 import requests
+import time
 
 app = FastAPI()
 
-# ===== LOAD MODEL =====
 model = pickle.load(open("model.pkl", "rb"))
 
-# ===== TELEGRAM CONFIG =====
 TOKEN = "8573374564:AAFv1x4VYdewYM2cFJF5JEX1YugV3jlFyyw"
 CHAT_ID = "-1003989233809"
 
+last_state = -1
+last_sent_time = 0
+
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": msg
-    }
-    try:
-        r = requests.post(url, data=data, timeout=5)
-        print("TG STATUS:", r.status_code)
-        print("TG RESPONSE:", r.text)
-    except Exception as e:
-        print("TG ERROR:", e)
-
-
-@app.get("/")
-def home():
-    return {"status": "running"}
-
+    data = {"chat_id": CHAT_ID, "text": msg}
+    requests.post(url, data=data)
 
 @app.post("/predict")
 def predict(data: dict):
-    try:
-        water = data["water_level"]
-        rain = data["rain_intensity"]
+    global last_state, last_sent_time
 
-        features = np.array([[water, rain]])
-        state = int(model.predict(features)[0])
+    water = data["water_level"]
+    rain = data["rain_intensity"]
 
-        print("STATE:", state)
+    features = np.array([[water, rain]])
+    state = int(model.predict(features)[0])
 
-        # ⭐ FORCE TELEGRAM FOR TESTING
-        if state >= 2:
-            msg = f"""⚠ TEST ALERT
+    print("STATE:", state)
+
+    # anti-spam logic
+    if state >= 2:
+        if state != last_state or (time.time() - last_sent_time > 60):
+            msg = f"""⚠ FLOOD ALERT
 
 State: {state}
 Water: {water}
 Rain: {rain}
 """
             send_telegram(msg)
+            last_sent_time = time.time()
 
-        return {"state": state}
+    last_state = state
 
-    except Exception as e:
-        print("ERROR:", e)
-        return {"state": 0}
+    return {"state": state}
+
+@app.get("/")
+def home():
+    return {"status": "running"}

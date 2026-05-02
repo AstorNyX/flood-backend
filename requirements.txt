@@ -3,5 +3,3 @@ uvicorn
 scikit-learn
 numpy
 requests
-paho-mqtt
-pandas
