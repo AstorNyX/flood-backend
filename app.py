@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 import pickle
 import numpy as np
+import pandas as pd
 import requests
 import time
 import json
@@ -18,8 +19,8 @@ CHAT_ID = "-1003989233809"
 
 # ===== MQTT CONFIG =====
 MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT   = 1883
-MQTT_TOPIC  = "flood/sensors"          # ESP32 publishes here
+MQTT_PORT   = 8083                  # WebSocket port — works on Render (1883 is blocked)
+MQTT_TOPIC  = "flood/sensors"
 
 # ===== STATE STORAGE =====
 last_data = {"water": 0, "rain": 0, "state": 0}
@@ -52,18 +53,18 @@ def send_telegram(msg):
     except Exception as e:
         print(f"[Telegram] Error: {e}")
 
-def run_prediction(water, rain):
-    """Shared prediction logic used by both MQTT and HTTP paths."""
+def run_prediction(water, rain, source="HTTP"):
     global last_alert_state, last_water, last_rain, last_sent_time
 
-    features = np.array([[water, rain]])
+    # Use DataFrame so feature names match what the model was trained on
+    features = pd.DataFrame([[water, rain]], columns=["water_level", "rain_intensity"])
     state    = int(model.predict(features)[0])
 
     last_data["water"] = water
     last_data["rain"]  = rain
     last_data["state"] = state
 
-    print(f"[PREDICT] State={state} ({get_label(state)}) | Water={water} | Rain={rain}")
+    print(f"[{source}] State={state} ({get_label(state)}) | Water={water} | Rain={rain}")
 
     water_changed = abs(water - last_water) > WATER_DELTA
     rain_changed  = abs(rain  - last_rain)  > RAIN_DELTA
@@ -73,19 +74,19 @@ def run_prediction(water, rain):
     can_send = (now - last_sent_time) > COOLDOWN_SEC
 
     if state >= 2 and can_send and (state_changed or water_changed or rain_changed):
-        print("[Telegram] Sending ALERT...")
+        print(f"[Telegram] Sending ALERT via {source}...")
         msg = (
             f"{get_emoji(state)} <b>FLOOD ALERT — {get_label(state)}</b>\n\n"
             f"🌊 Water Level   : {water} cm\n"
             f"🌧 Rain Intensity: {rain}\n"
             f"📊 State Code    : {state}\n"
-            f"📡 Source        : {'MQTT' if True else 'HTTP'}"
+            f"📡 Source        : {source}\n"
         )
         send_telegram(msg)
         last_sent_time = now
 
     elif state < 2 and last_alert_state >= 2 and can_send:
-        print("[Telegram] Sending RECOVERY...")
+        print(f"[Telegram] Sending RECOVERY via {source}...")
         msg = (
             f"✅ <b>FLOOD CLEARED — {get_label(state)}</b>\n\n"
             f"🌊 Water Level   : {water} cm\n"
@@ -98,17 +99,19 @@ def run_prediction(water, rain):
     last_alert_state = state
     last_water       = water
     last_rain        = rain
-
     return state
 
 # ===== MQTT CALLBACKS =====
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print(f"[MQTT] Connected to {MQTT_BROKER}")
+        print(f"[MQTT] Connected to {MQTT_BROKER}:{MQTT_PORT} (WebSocket)")
         client.subscribe(MQTT_TOPIC)
-        print(f"[MQTT] Subscribed to topic: {MQTT_TOPIC}")
+        print(f"[MQTT] Subscribed to: {MQTT_TOPIC}")
     else:
-        print(f"[MQTT] Connection failed, rc={rc}")
+        print(f"[MQTT] Connection failed rc={rc}")
+
+def on_disconnect(client, userdata, rc):
+    print(f"[MQTT] Disconnected rc={rc}. Will auto-reconnect...")
 
 def on_message(client, userdata, msg):
     try:
@@ -116,26 +119,40 @@ def on_message(client, userdata, msg):
         water   = payload.get("water_level", 0)
         rain    = payload.get("rain_intensity", 0)
         print(f"[MQTT] Received -> water={water}, rain={rain}")
-        run_prediction(water, rain)
+        run_prediction(water, rain, source="MQTT")
     except Exception as e:
         print(f"[MQTT] Parse error: {e}")
 
 def start_mqtt():
-    client = mqtt.Client()
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-    client.loop_forever()   # blocking — runs in its own thread
+    while True:   # outer loop restarts MQTT if it ever fully drops
+        try:
+            client = mqtt.Client(
+                transport="websockets"    # <-- key fix: use WS not raw TCP
+            )
+            client.ws_set_options(path="/mqtt")
+            client.on_connect    = on_connect
+            client.on_disconnect = on_disconnect
+            client.on_message    = on_message
+            client.reconnect_delay_set(min_delay=1, max_delay=30)
+            client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+            client.loop_forever()
+        except Exception as e:
+            print(f"[MQTT] Thread error: {e}. Restarting in 5s...")
+            time.sleep(5)
 
 # ===== START MQTT IN BACKGROUND =====
 mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
 mqtt_thread.start()
 
-# ===== HTTP ROUTES (kept for manual testing via /docs) =====
+# ===== HTTP ROUTES =====
 
 @app.get("/")
 def home():
-    return {"status": "running", "mqtt": f"{MQTT_BROKER}:{MQTT_PORT}/{MQTT_TOPIC}"}
+    return {
+        "status": "running",
+        "mqtt_broker": f"{MQTT_BROKER}:{MQTT_PORT}",
+        "mqtt_topic": MQTT_TOPIC
+    }
 
 @app.get("/ping")
 def ping():
@@ -149,5 +166,5 @@ def status():
 def predict(data: dict):
     water = data.get("water_level", 0)
     rain  = data.get("rain_intensity", 0)
-    state = run_prediction(water, rain)
+    state = run_prediction(water, rain, source="HTTP")
     return {"state": state, "label": get_label(state)}
