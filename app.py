@@ -10,7 +10,7 @@ app = FastAPI()
 model = pickle.load(open("model.pkl", "rb"))
 
 # ===== TELEGRAM CONFIG =====
-TOKEN = "8573374564:AAFmOnDbMd1r2DVJbKtIs03gnj-b6yY6D98"
+TOKEN = "8573374564:AAEy8oRKuk0iK8nQ2tXJNXhJJYXzBg87ixA"
 CHAT_ID = "-1003989233809"
 
 # ===== STATE STORAGE =====
